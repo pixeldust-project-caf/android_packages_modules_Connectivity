@@ -80,7 +80,6 @@ import static android.net.NetworkCapabilities.TRANSPORT_TEST;
 import static android.net.NetworkCapabilities.TRANSPORT_VPN;
 import static android.net.NetworkCapabilities.TRANSPORT_WIFI;
 import static android.net.NetworkRequest.Type.LISTEN_FOR_BEST;
-import static android.net.NetworkScore.POLICY_TRANSPORT_PRIMARY;
 import static android.net.OemNetworkPreferences.OEM_NETWORK_PREFERENCE_TEST;
 import static android.net.OemNetworkPreferences.OEM_NETWORK_PREFERENCE_TEST_ONLY;
 import static android.net.shared.NetworkMonitorUtils.isPrivateDnsValidationRequired;
@@ -336,9 +335,6 @@ public class ConnectivityService extends IConnectivityManager.Stub
     protected int mLingerDelayMs;  // Can't be final, or test subclass constructors can't change it.
     @VisibleForTesting
     protected int mNascentDelayMs;
-    // True if the cell radio of the device is capable of time-sharing.
-    @VisibleForTesting
-    protected boolean mCellularRadioTimesharingCapable = true;
 
     // How long to delay to removal of a pending intent based request.
     // See ConnectivitySettingsManager.CONNECTIVITY_RELEASE_PENDING_INTENT_DELAY_MS
@@ -1379,12 +1375,6 @@ public class ConnectivityService extends IConnectivityManager.Stub
                 NetworkCapabilities.NET_CAPABILITY_VEHICLE_INTERNAL,
                 NetworkRequest.Type.BACKGROUND_REQUEST);
 
-        mLingerDelayMs = mSystemProperties.getInt(LINGER_DELAY_PROPERTY, DEFAULT_LINGER_DELAY_MS);
-        // TODO: Consider making the timer customizable.
-        mNascentDelayMs = DEFAULT_NASCENT_DELAY_MS;
-        mCellularRadioTimesharingCapable =
-                mResources.get().getBoolean(R.bool.config_cellular_radio_timesharing_capable);
-
         mHandlerThread = mDeps.makeHandlerThread();
         mHandlerThread.start();
         mHandler = new InternalHandler(mHandlerThread.getLooper());
@@ -1394,6 +1384,10 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
         mReleasePendingIntentDelayMs = Settings.Secure.getInt(context.getContentResolver(),
                 ConnectivitySettingsManager.CONNECTIVITY_RELEASE_PENDING_INTENT_DELAY_MS, 5_000);
+
+        mLingerDelayMs = mSystemProperties.getInt(LINGER_DELAY_PROPERTY, DEFAULT_LINGER_DELAY_MS);
+        // TODO: Consider making the timer customizable.
+        mNascentDelayMs = DEFAULT_NASCENT_DELAY_MS;
 
         mStatsManager = mContext.getSystemService(NetworkStatsManager.class);
         mPolicyManager = mContext.getSystemService(NetworkPolicyManager.class);
@@ -2324,7 +2318,9 @@ public class ConnectivityService extends IConnectivityManager.Stub
         final ArrayList<NetworkStateSnapshot> result = new ArrayList<>();
         for (Network network : getAllNetworks()) {
             final NetworkAgentInfo nai = getNetworkAgentInfoForNetwork(network);
-            if (nai != null && nai.everConnected) {
+            // TODO: Consider include SUSPENDED networks, which should be considered as
+            //  temporary shortage of connectivity of a connected network.
+            if (nai != null && nai.networkInfo.isConnected()) {
                 // TODO (b/73321673) : NetworkStateSnapshot contains a copy of the
                 // NetworkCapabilities, which may contain UIDs of apps to which the
                 // network applies. Should the UIDs be cleared so as not to leak or
@@ -2365,6 +2361,26 @@ public class ConnectivityService extends IConnectivityManager.Stub
         return false;
     }
 
+    private int getAppUid(final String app, final UserHandle user) {
+        final PackageManager pm =
+                mContext.createContextAsUser(user, 0 /* flags */).getPackageManager();
+        final long token = Binder.clearCallingIdentity();
+        try {
+            return pm.getPackageUid(app, 0 /* flags */);
+        } catch (PackageManager.NameNotFoundException e) {
+            return -1;
+        } finally {
+            Binder.restoreCallingIdentity(token);
+        }
+    }
+
+    private void verifyCallingUidAndPackage(String packageName, int callingUid) {
+        final UserHandle user = UserHandle.getUserHandleForUid(callingUid);
+        if (getAppUid(packageName, user) != callingUid) {
+            throw new SecurityException(packageName + " does not belong to uid " + callingUid);
+        }
+    }
+
     /**
      * Ensure that a network route exists to deliver traffic to the specified
      * host via the specified network interface.
@@ -2380,6 +2396,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
         if (disallowedBecauseSystemCaller()) {
             return false;
         }
+        verifyCallingUidAndPackage(callingPackageName, mDeps.getCallingUid());
         enforceChangePermission(callingPackageName, callingAttributionTag);
         if (mProtectedNetworks.contains(networkType)) {
             enforceConnectivityRestrictedNetworksPermission();
@@ -3822,7 +3839,9 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
     private void handleNetworkAgentDisconnected(Message msg) {
         NetworkAgentInfo nai = (NetworkAgentInfo) msg.obj;
-        disconnectAndDestroyNetwork(nai);
+        if (mNetworkAgentInfos.contains(nai)) {
+            disconnectAndDestroyNetwork(nai);
+        }
     }
 
     // Destroys a network, remove references to it from the internal state managed by
@@ -3830,9 +3849,6 @@ public class ConnectivityService extends IConnectivityManager.Stub
     // Must be called on the Handler thread.
     private void disconnectAndDestroyNetwork(NetworkAgentInfo nai) {
         ensureRunningOnConnectivityServiceThread();
-
-        if (!mNetworkAgentInfos.contains(nai)) return;
-
         if (DBG) {
             log(nai.toShortString() + " disconnected, was satisfying " + nai.numNetworkRequests());
         }
@@ -3918,7 +3934,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
         try {
             mNetd.networkSetPermissionForNetwork(nai.network.netId, INetd.PERMISSION_SYSTEM);
         } catch (RemoteException e) {
-            Log.d(TAG, "Error marking network restricted during teardown: ", e);
+            Log.d(TAG, "Error marking network restricted during teardown: " + e);
         }
         mHandler.postDelayed(() -> destroyNetwork(nai), nai.teardownDelayMs);
     }
@@ -6842,15 +6858,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
 
     private void handleUnregisterNetworkOffer(@NonNull final NetworkOfferInfo noi) {
         ensureRunningOnConnectivityServiceThread();
-
-        if (DBG) {
-            log("unregister offer from providerId " + noi.offer.providerId + " : " + noi.offer);
-        }
-
-        // If the provider removes the offer and dies immediately afterwards this
-        // function may be called twice in a row, but the array will no longer contain
-        // the offer.
-        if (!mNetworkOffers.remove(noi)) return;
+        mNetworkOffers.remove(noi);
         noi.offer.callback.asBinder().unlinkToDeath(noi, 0 /* flags */);
     }
 
@@ -7771,30 +7779,6 @@ public class ConnectivityService extends IConnectivityManager.Stub
         bundle.putParcelable(t.getClass().getSimpleName(), t);
     }
 
-    /**
-     * Returns whether reassigning a request from an NAI to another can be done gracefully.
-     *
-     * When a request should be assigned to a new network, it is normally lingered to give
-     * time for apps to gracefully migrate their connections. When both networks are on the same
-     * radio, but that radio can't do time-sharing efficiently, this may end up being
-     * counter-productive because any traffic on the old network may drastically reduce the
-     * performance of the new network.
-     * The stack supports a configuration to let modem vendors state that their radio can't
-     * do time-sharing efficiently. If this configuration is set, the stack assumes moving
-     * from one cell network to another can't be done gracefully.
-     *
-     * @param oldNai the old network serving the request
-     * @param newNai the new network serving the request
-     * @return whether the switch can be graceful
-     */
-    private boolean canSupportGracefulNetworkSwitch(@NonNull final NetworkAgentInfo oldSatisfier,
-            @NonNull final NetworkAgentInfo newSatisfier) {
-        if (mCellularRadioTimesharingCapable) return true;
-        return !oldSatisfier.networkCapabilities.hasSingleTransport(TRANSPORT_CELLULAR)
-                || !newSatisfier.networkCapabilities.hasSingleTransport(TRANSPORT_CELLULAR)
-                || !newSatisfier.getScore().hasPolicy(POLICY_TRANSPORT_PRIMARY);
-    }
-
     private void teardownUnneededNetwork(NetworkAgentInfo nai) {
         if (nai.numRequestNetworkRequests() != 0) {
             for (int i = 0; i < nai.numNetworkRequests(); i++) {
@@ -8055,13 +8039,7 @@ public class ConnectivityService extends IConnectivityManager.Stub
                     log("   accepting network in place of " + previousSatisfier.toShortString());
                 }
                 previousSatisfier.removeRequest(previousRequest.requestId);
-                if (canSupportGracefulNetworkSwitch(previousSatisfier, newSatisfier)) {
-                    // If this network switch can't be supported gracefully, the request is not
-                    // lingered. This allows letting go of the network sooner to reclaim some
-                    // performance on the new network, since the radio can't do both at the same
-                    // time while preserving good performance.
-                    previousSatisfier.lingerRequest(previousRequest.requestId, now);
-                }
+                previousSatisfier.lingerRequest(previousRequest.requestId, now);
             } else {
                 if (VDBG || DDBG) log("   accepting network in place of null");
             }

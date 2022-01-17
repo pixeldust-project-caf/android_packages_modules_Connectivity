@@ -1771,8 +1771,6 @@ public class ConnectivityServiceTest {
         doReturn(R.integer.config_networkAvoidBadWifi).when(mResources)
                 .getIdentifier(eq("config_networkAvoidBadWifi"), eq("integer"), any());
         doReturn(1).when(mResources).getInteger(R.integer.config_networkAvoidBadWifi);
-        doReturn(true).when(mResources)
-                .getBoolean(R.bool.config_cellular_radio_timesharing_capable);
 
         final ConnectivityResources connRes = mock(ConnectivityResources.class);
         doReturn(mResources).when(connRes).get();
@@ -2253,22 +2251,8 @@ public class ConnectivityServiceTest {
         waitForIdle();
     }
 
-    // TODO : migrate to @Parameterized
     @Test
-    public void testValidatedCellularOutscoresUnvalidatedWiFi_CanTimeShare() throws Exception {
-        // The behavior of this test should be the same whether the radio can time share or not.
-        doTestValidatedCellularOutscoresUnvalidatedWiFi(true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testValidatedCellularOutscoresUnvalidatedWiFi_CannotTimeShare() throws Exception {
-        doTestValidatedCellularOutscoresUnvalidatedWiFi(false);
-    }
-
-    public void doTestValidatedCellularOutscoresUnvalidatedWiFi(
-            final boolean cellRadioTimesharingCapable) throws Exception {
-        mService.mCellularRadioTimesharingCapable = cellRadioTimesharingCapable;
+    public void testValidatedCellularOutscoresUnvalidatedWiFi() throws Exception {
         // Test bringing up unvalidated WiFi
         mWiFiNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_WIFI);
         ExpectedBroadcast b = registerConnectivityBroadcast(1);
@@ -2302,21 +2286,8 @@ public class ConnectivityServiceTest {
         verifyNoNetwork();
     }
 
-    // TODO : migrate to @Parameterized
     @Test
-    public void testUnvalidatedWifiOutscoresUnvalidatedCellular_CanTimeShare() throws Exception {
-        doTestUnvalidatedWifiOutscoresUnvalidatedCellular(true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testUnvalidatedWifiOutscoresUnvalidatedCellular_CannotTimeShare() throws Exception {
-        doTestUnvalidatedWifiOutscoresUnvalidatedCellular(false);
-    }
-
-    public void doTestUnvalidatedWifiOutscoresUnvalidatedCellular(
-            final boolean cellRadioTimesharingCapable) throws Exception {
-        mService.mCellularRadioTimesharingCapable = cellRadioTimesharingCapable;
+    public void testUnvalidatedWifiOutscoresUnvalidatedCellular() throws Exception {
         // Test bringing up unvalidated cellular.
         mCellNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_CELLULAR);
         ExpectedBroadcast b = registerConnectivityBroadcast(1);
@@ -2341,21 +2312,8 @@ public class ConnectivityServiceTest {
         verifyNoNetwork();
     }
 
-    // TODO : migrate to @Parameterized
     @Test
-    public void testUnlingeringDoesNotValidate_CanTimeShare() throws Exception {
-        doTestUnlingeringDoesNotValidate(true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testUnlingeringDoesNotValidate_CannotTimeShare() throws Exception {
-        doTestUnlingeringDoesNotValidate(false);
-    }
-
-    public void doTestUnlingeringDoesNotValidate(
-            final boolean cellRadioTimesharingCapable) throws Exception {
-        mService.mCellularRadioTimesharingCapable = cellRadioTimesharingCapable;
+    public void testUnlingeringDoesNotValidate() throws Exception {
         // Test bringing up unvalidated WiFi.
         mWiFiNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_WIFI);
         ExpectedBroadcast b = registerConnectivityBroadcast(1);
@@ -2382,134 +2340,8 @@ public class ConnectivityServiceTest {
                 NET_CAPABILITY_VALIDATED));
     }
 
-    // TODO : migrate to @Parameterized
     @Test
-    public void testRequestMigrationToSameTransport_CanTimeShare() throws Exception {
-        // Simulate a device where the cell radio is capable of time sharing
-        mService.mCellularRadioTimesharingCapable = true;
-        doTestRequestMigrationToSameTransport(TRANSPORT_CELLULAR, true);
-        doTestRequestMigrationToSameTransport(TRANSPORT_WIFI, true);
-        doTestRequestMigrationToSameTransport(TRANSPORT_ETHERNET, true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testRequestMigrationToSameTransport_CannotTimeShare() throws Exception {
-        // Simulate a device where the cell radio is not capable of time sharing
-        mService.mCellularRadioTimesharingCapable = false;
-        doTestRequestMigrationToSameTransport(TRANSPORT_CELLULAR, false);
-        doTestRequestMigrationToSameTransport(TRANSPORT_WIFI, true);
-        doTestRequestMigrationToSameTransport(TRANSPORT_ETHERNET, true);
-    }
-
-    public void doTestRequestMigrationToSameTransport(final int transport,
-            final boolean expectLingering) throws Exception {
-        // To speed up tests the linger delay is very short by default in tests but this
-        // test needs to make sure the delay is not incurred so a longer value is safer (it
-        // reduces the risk that a bug exists but goes undetected). The alarm manager in the test
-        // throws and crashes CS if this is set to anything more than the below constant though.
-        mService.mLingerDelayMs = UNREASONABLY_LONG_ALARM_WAIT_MS;
-
-        final TestNetworkCallback generalCb = new TestNetworkCallback();
-        final TestNetworkCallback defaultCb = new TestNetworkCallback();
-        mCm.registerNetworkCallback(
-                new NetworkRequest.Builder().addTransportType(transport | transport).build(),
-                generalCb);
-        mCm.registerDefaultNetworkCallback(defaultCb);
-
-        // Bring up net agent 1
-        final TestNetworkAgentWrapper net1 = new TestNetworkAgentWrapper(transport);
-        net1.connect(true);
-        // Make sure the default request is on net 1
-        generalCb.expectAvailableThenValidatedCallbacks(net1);
-        defaultCb.expectAvailableThenValidatedCallbacks(net1);
-
-        // Bring up net 2 with primary and mms
-        final TestNetworkAgentWrapper net2 = new TestNetworkAgentWrapper(transport);
-        net2.addCapability(NET_CAPABILITY_MMS);
-        net2.setScore(new NetworkScore.Builder().setTransportPrimary(true).build());
-        net2.connect(true);
-
-        // Make sure the default request goes to net 2
-        generalCb.expectAvailableCallbacksUnvalidated(net2);
-        if (expectLingering) {
-            generalCb.expectCallback(CallbackEntry.LOSING, net1);
-        }
-        generalCb.expectCapabilitiesWith(NET_CAPABILITY_VALIDATED, net2);
-        defaultCb.expectAvailableDoubleValidatedCallbacks(net2);
-
-        // Make sure cell 1 is unwanted immediately if the radio can't time share, but only
-        // after some delay if it can.
-        if (expectLingering) {
-            net1.assertNotDisconnected(TEST_CALLBACK_TIMEOUT_MS); // always incurs the timeout
-            generalCb.assertNoCallback();
-            // assertNotDisconnected waited for TEST_CALLBACK_TIMEOUT_MS, so waiting for the
-            // linger period gives TEST_CALLBACK_TIMEOUT_MS time for the event to process.
-            net1.expectDisconnected(UNREASONABLY_LONG_ALARM_WAIT_MS);
-        } else {
-            net1.expectDisconnected(TEST_CALLBACK_TIMEOUT_MS);
-        }
-        net1.disconnect();
-        generalCb.expectCallback(CallbackEntry.LOST, net1);
-
-        // Remove primary from net 2
-        net2.setScore(new NetworkScore.Builder().build());
-        // Request MMS
-        final TestNetworkCallback mmsCallback = new TestNetworkCallback();
-        mCm.requestNetwork(new NetworkRequest.Builder().addCapability(NET_CAPABILITY_MMS).build(),
-                mmsCallback);
-        mmsCallback.expectAvailableCallbacksValidated(net2);
-
-        // Bring up net 3 with primary but without MMS
-        final TestNetworkAgentWrapper net3 = new TestNetworkAgentWrapper(transport);
-        net3.setScore(new NetworkScore.Builder().setTransportPrimary(true).build());
-        net3.connect(true);
-
-        // Make sure default goes to net 3, but the MMS request doesn't
-        generalCb.expectAvailableThenValidatedCallbacks(net3);
-        defaultCb.expectAvailableDoubleValidatedCallbacks(net3);
-        mmsCallback.assertNoCallback();
-        net2.assertNotDisconnected(TEST_CALLBACK_TIMEOUT_MS); // Always incurs the timeout
-
-        // Revoke MMS request and make sure net 2 is torn down with the appropriate delay
-        mCm.unregisterNetworkCallback(mmsCallback);
-        if (expectLingering) {
-            // If the radio can time share, the linger delay hasn't elapsed yet, so apps will
-            // get LOSING. If the radio can't time share, this is a hard loss, since the last
-            // request keeping up this network has been removed and the network isn't lingering
-            // for any other request.
-            generalCb.expectCallback(CallbackEntry.LOSING, net2);
-            net2.assertNotDisconnected(TEST_CALLBACK_TIMEOUT_MS);
-            generalCb.assertNoCallback();
-            net2.expectDisconnected(UNREASONABLY_LONG_ALARM_WAIT_MS);
-        } else {
-            net2.expectDisconnected(TEST_CALLBACK_TIMEOUT_MS);
-        }
-        net2.disconnect();
-        generalCb.expectCallback(CallbackEntry.LOST, net2);
-        defaultCb.assertNoCallback();
-
-        net3.disconnect();
-        mCm.unregisterNetworkCallback(defaultCb);
-        mCm.unregisterNetworkCallback(generalCb);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testCellularOutscoresWeakWifi_CanTimeShare() throws Exception {
-        // The behavior of this test should be the same whether the radio can time share or not.
-        doTestCellularOutscoresWeakWifi(true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testCellularOutscoresWeakWifi_CannotTimeShare() throws Exception {
-        doTestCellularOutscoresWeakWifi(false);
-    }
-
-    public void doTestCellularOutscoresWeakWifi(
-            final boolean cellRadioTimesharingCapable) throws Exception {
-        mService.mCellularRadioTimesharingCapable = cellRadioTimesharingCapable;
+    public void testCellularOutscoresWeakWifi() throws Exception {
         // Test bringing up validated cellular.
         mCellNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_CELLULAR);
         ExpectedBroadcast b = registerConnectivityBroadcast(1);
@@ -2534,21 +2366,8 @@ public class ConnectivityServiceTest {
         verifyActiveNetwork(TRANSPORT_WIFI);
     }
 
-    // TODO : migrate to @Parameterized
     @Test
-    public void testReapingNetwork_CanTimeShare() throws Exception {
-        doTestReapingNetwork(true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testReapingNetwork_CannotTimeShare() throws Exception {
-        doTestReapingNetwork(false);
-    }
-
-    public void doTestReapingNetwork(
-            final boolean cellRadioTimesharingCapable) throws Exception {
-        mService.mCellularRadioTimesharingCapable = cellRadioTimesharingCapable;
+    public void testReapingNetwork() throws Exception {
         // Test bringing up WiFi without NET_CAPABILITY_INTERNET.
         // Expect it to be torn down immediately because it satisfies no requests.
         mWiFiNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_WIFI);
@@ -2576,21 +2395,8 @@ public class ConnectivityServiceTest {
         mWiFiNetworkAgent.expectDisconnected();
     }
 
-    // TODO : migrate to @Parameterized
     @Test
-    public void testCellularFallback_CanTimeShare() throws Exception {
-        doTestCellularFallback(true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testCellularFallback_CannotTimeShare() throws Exception {
-        doTestCellularFallback(false);
-    }
-
-    public void doTestCellularFallback(
-            final boolean cellRadioTimesharingCapable) throws Exception {
-        mService.mCellularRadioTimesharingCapable = cellRadioTimesharingCapable;
+    public void testCellularFallback() throws Exception {
         // Test bringing up validated cellular.
         mCellNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_CELLULAR);
         ExpectedBroadcast b = registerConnectivityBroadcast(1);
@@ -2627,21 +2433,8 @@ public class ConnectivityServiceTest {
         verifyActiveNetwork(TRANSPORT_WIFI);
     }
 
-    // TODO : migrate to @Parameterized
     @Test
-    public void testWiFiFallback_CanTimeShare() throws Exception {
-        doTestWiFiFallback(true);
-    }
-
-    // TODO : migrate to @Parameterized
-    @Test
-    public void testWiFiFallback_CannotTimeShare() throws Exception {
-        doTestWiFiFallback(false);
-    }
-
-    public void doTestWiFiFallback(
-            final boolean cellRadioTimesharingCapable) throws Exception {
-        mService.mCellularRadioTimesharingCapable = cellRadioTimesharingCapable;
+    public void testWiFiFallback() throws Exception {
         // Test bringing up unvalidated WiFi.
         mWiFiNetworkAgent = new TestNetworkAgentWrapper(TRANSPORT_WIFI);
         ExpectedBroadcast b = registerConnectivityBroadcast(1);
@@ -6428,16 +6221,16 @@ public class ConnectivityServiceTest {
         mCm.unregisterNetworkCallback(networkCallback);
     }
 
-    private void expectNotifyNetworkStatus(List<Network> defaultNetworks, String defaultIface,
+    private void expectNotifyNetworkStatus(List<Network> networks, String defaultIface,
             Integer vpnUid, String vpnIfname, List<String> underlyingIfaces) throws Exception {
-        ArgumentCaptor<List<Network>> defaultNetworksCaptor = ArgumentCaptor.forClass(List.class);
+        ArgumentCaptor<List<Network>> networksCaptor = ArgumentCaptor.forClass(List.class);
         ArgumentCaptor<List<UnderlyingNetworkInfo>> vpnInfosCaptor =
                 ArgumentCaptor.forClass(List.class);
 
-        verify(mStatsManager, atLeastOnce()).notifyNetworkStatus(defaultNetworksCaptor.capture(),
+        verify(mStatsManager, atLeastOnce()).notifyNetworkStatus(networksCaptor.capture(),
                 any(List.class), eq(defaultIface), vpnInfosCaptor.capture());
 
-        assertSameElements(defaultNetworks, defaultNetworksCaptor.getValue());
+        assertSameElements(networks, networksCaptor.getValue());
 
         List<UnderlyingNetworkInfo> infos = vpnInfosCaptor.getValue();
         if (vpnUid != null) {
@@ -6453,8 +6246,8 @@ public class ConnectivityServiceTest {
     }
 
     private void expectNotifyNetworkStatus(
-            List<Network> defaultNetworks, String defaultIface) throws Exception {
-        expectNotifyNetworkStatus(defaultNetworks, defaultIface, null, null, List.of());
+            List<Network> networks, String defaultIface) throws Exception {
+        expectNotifyNetworkStatus(networks, defaultIface, null, null, List.of());
     }
 
     @Test
@@ -13055,26 +12848,21 @@ public class ConnectivityServiceTest {
         assertLength(2, snapshots);
         assertContainsAll(snapshots, cellSnapshot, wifiSnapshot);
 
-        // Set cellular as suspended, verify the snapshots will contain suspended networks.
+        // Set cellular as suspended, verify the snapshots will not contain suspended networks.
+        // TODO: Consider include SUSPENDED networks, which should be considered as
+        //  temporary shortage of connectivity of a connected network.
         mCellNetworkAgent.suspend();
         waitForIdle();
-        final NetworkCapabilities cellSuspendedNc =
-                mCm.getNetworkCapabilities(mCellNetworkAgent.getNetwork());
-        assertFalse(cellSuspendedNc.hasCapability(NET_CAPABILITY_NOT_SUSPENDED));
-        final NetworkStateSnapshot cellSuspendedSnapshot = new NetworkStateSnapshot(
-                mCellNetworkAgent.getNetwork(), cellSuspendedNc, cellLp,
-                null, ConnectivityManager.TYPE_MOBILE);
         snapshots = mCm.getAllNetworkStateSnapshots();
-        assertLength(2, snapshots);
-        assertContainsAll(snapshots, cellSuspendedSnapshot, wifiSnapshot);
+        assertLength(1, snapshots);
+        assertEquals(wifiSnapshot, snapshots.get(0));
 
-        // Disconnect wifi, verify the snapshots contain only cellular.
+        // Disconnect wifi, verify the snapshots contain nothing.
         mWiFiNetworkAgent.disconnect();
         waitForIdle();
         snapshots = mCm.getAllNetworkStateSnapshots();
         assertEquals(mCellNetworkAgent.getNetwork(), mCm.getActiveNetwork());
-        assertLength(1, snapshots);
-        assertEquals(cellSuspendedSnapshot, snapshots.get(0));
+        assertLength(0, snapshots);
 
         mCellNetworkAgent.resume();
         waitForIdle();
@@ -14152,5 +13940,12 @@ public class ConnectivityServiceTest {
         assertNoCallbacks(mProfileDefaultNetworkCallback, mTestPackageDefaultNetworkCallback);
         mDefaultNetworkCallback.expectCallback(CallbackEntry.LOST, mWiFiNetworkAgent);
         mDefaultNetworkCallback.expectAvailableCallbacksValidated(mCellNetworkAgent);
+    }
+
+    @Test
+    public void testRequestRouteToHostAddress_PackageDoesNotBelongToCaller() {
+        assertThrows(SecurityException.class, () -> mService.requestRouteToHostAddress(
+                ConnectivityManager.TYPE_NONE, null /* hostAddress */, "com.not.package.owner",
+                null /* callingAttributionTag */));
     }
 }
