@@ -105,6 +105,9 @@ java_sdk_library {
         "//packages/modules/Connectivity/tests:__subpackages__",
         "//packages/modules/NetworkStack/tests:__subpackages__",
         "//packages/modules/Wifi/service/tests/wifitests",
+
+	// Qualcomm's wigig-service requires this line
+ 	"//vendor:__subpackages__",
     ],
     apex_available: [
         "com.android.tethering",
