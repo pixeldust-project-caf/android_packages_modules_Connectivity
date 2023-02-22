@@ -103,6 +103,7 @@ public class NearbyManager {
         mService = service;
     }
 
+    @Nullable
     private static NearbyDevice toClientNearbyDevice(
             NearbyDeviceParcelable nearbyDeviceParcelable,
             @ScanRequest.ScanType int scanType) {
@@ -118,23 +119,12 @@ public class NearbyManager {
         }
 
         if (scanType == ScanRequest.SCAN_TYPE_NEARBY_PRESENCE) {
-            PublicCredential publicCredential = nearbyDeviceParcelable.getPublicCredential();
-            if (publicCredential == null) {
-                return null;
+            PresenceDevice presenceDevice = nearbyDeviceParcelable.getPresenceDevice();
+            if (presenceDevice == null) {
+                Log.e(TAG,
+                        "Cannot find any Presence device in discovered NearbyDeviceParcelable");
             }
-            byte[] salt = nearbyDeviceParcelable.getSalt();
-            if (salt == null) {
-                salt = new byte[0];
-            }
-            return new PresenceDevice.Builder(
-                    // Use the public credential hash as the device Id.
-                    String.valueOf(publicCredential.hashCode()),
-                    salt,
-                    publicCredential.getSecretId(),
-                    publicCredential.getEncryptedMetadata())
-                    .setRssi(nearbyDeviceParcelable.getRssi())
-                    .addMedium(nearbyDeviceParcelable.getMedium())
-                    .build();
+            return presenceDevice;
         }
         return null;
     }
@@ -339,9 +329,9 @@ public class NearbyManager {
         public void onDiscovered(NearbyDeviceParcelable nearbyDeviceParcelable)
                 throws RemoteException {
             mExecutor.execute(() -> {
-                if (mScanCallback != null) {
-                    mScanCallback.onDiscovered(
-                            toClientNearbyDevice(nearbyDeviceParcelable, mScanType));
+                NearbyDevice nearbyDevice = toClientNearbyDevice(nearbyDeviceParcelable, mScanType);
+                if (mScanCallback != null && nearbyDevice != null) {
+                    mScanCallback.onDiscovered(nearbyDevice);
                 }
             });
         }
@@ -350,7 +340,8 @@ public class NearbyManager {
         public void onUpdated(NearbyDeviceParcelable nearbyDeviceParcelable)
                 throws RemoteException {
             mExecutor.execute(() -> {
-                if (mScanCallback != null) {
+                NearbyDevice nearbyDevice = toClientNearbyDevice(nearbyDeviceParcelable, mScanType);
+                if (mScanCallback != null && nearbyDevice != null) {
                     mScanCallback.onUpdated(
                             toClientNearbyDevice(nearbyDeviceParcelable, mScanType));
                 }
@@ -360,7 +351,8 @@ public class NearbyManager {
         @Override
         public void onLost(NearbyDeviceParcelable nearbyDeviceParcelable) throws RemoteException {
             mExecutor.execute(() -> {
-                if (mScanCallback != null) {
+                NearbyDevice nearbyDevice = toClientNearbyDevice(nearbyDeviceParcelable, mScanType);
+                if (mScanCallback != null && nearbyDevice != null) {
                     mScanCallback.onLost(
                             toClientNearbyDevice(nearbyDeviceParcelable, mScanType));
                 }
